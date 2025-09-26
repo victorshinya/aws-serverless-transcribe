@@ -30,7 +30,11 @@ def lambda_handler(event, context):
         TranscriptionJobName=job_name,
         Media={'MediaFileUri': f's3://{bucket}/{key}'},
         MediaFormat='mp3',
-        LanguageCode='pt-BR'
+        LanguageCode='pt-BR',
+        Settings={
+            'ShowSpeakerLabels': True,
+            'MaxSpeakerLabels': 10  # Adjust based on expected number of speakers
+        }
     )
     
     # Poll with exponential backoff
@@ -53,8 +57,38 @@ def lambda_handler(event, context):
                 with urllib.request.urlopen(transcript_uri) as response:
                     transcript_data = json.loads(response.read().decode())
                 
+                # Extract full transcript and speaker segments
                 transcript_text = transcript_data['results']['transcripts'][0]['transcript']
+                
+                # Process speaker segments if available
+                speaker_segments = []
+                if 'speaker_labels' in transcript_data['results']:
+                    # Get all items with speaker labels
+                    items = transcript_data['results']['items']
+                    segments = transcript_data['results']['speaker_labels']['segments']
+                    
+                    for segment in segments:
+                        # Find words for this speaker segment based on time range
+                        segment_words = []
+                        start_time = float(segment['start_time'])
+                        end_time = float(segment['end_time'])
+                        
+                        for item in items:
+                            if item['type'] == 'pronunciation' and 'start_time' in item:
+                                item_start = float(item['start_time'])
+                                if start_time <= item_start <= end_time:
+                                    if 'alternatives' in item and len(item['alternatives']) > 0:
+                                        segment_words.append(item['alternatives'][0]['content'])
+                        
+                        speaker_segments.append({
+                            'speaker': segment['speaker_label'],
+                            'start_time': segment['start_time'],
+                            'end_time': segment['end_time'],
+                            'text': ' '.join(segment_words)
+                        })
+                
                 print(f"Transcript: {transcript_text[:100]}...")
+                print(f"Found {len(speaker_segments)} speaker segments")
                 
                 table = dynamodb.Table('transcriptions')
                 table.put_item(
@@ -63,6 +97,7 @@ def lambda_handler(event, context):
                         'source_bucket': bucket,
                         'source_key': key,
                         'transcript': transcript_text,
+                        'speaker_segments': speaker_segments,
                         'timestamp': datetime.now().isoformat(),
                         'language': 'pt-BR'
                     }
