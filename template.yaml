@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Serverless MP3 transcription to Brazilian Portuguese'
+
+Resources:
+  TranscriptionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: transcriptions
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  Mp3UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-mp3-uploads'
+
+  TranscribeMp3Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: transcribe-mp3-function
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      CodeUri: ./
+      Timeout: 900
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: 'arn:aws:logs:*:*:*'
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+                - s3:PutObject
+                - s3:PutObjectAcl
+              Resource: 
+                - 'arn:aws:s3:::*/*'
+                - 'arn:aws:s3:::*'
+            - Effect: Allow
+              Action:
+                - transcribe:StartTranscriptionJob
+                - transcribe:GetTranscriptionJob
+                - transcribe:DeleteTranscriptionJob
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt TranscriptionsTable.Arn
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref Mp3UploadBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .mp3
+
+Outputs:
+  BucketName:
+    Description: S3 bucket for MP3 uploads
+    Value: !Ref Mp3UploadBucket
+  
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref TranscribeMp3Function
+  
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref TranscriptionsTable
